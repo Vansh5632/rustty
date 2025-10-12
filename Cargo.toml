@@ -1,0 +1,17 @@
+[package]
+name = "Rustdb"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+
+[workspace]
+members = [
+    "core",
+    "schema",
+    "storage",
+    "query",
+    "wasm",
+    "server",
+]
+resolver = "2" # Specifies the modern feature resolver
