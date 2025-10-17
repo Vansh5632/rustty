@@ -1,14 +1,11 @@
 use rust_db_core::{DbError, Database, Result};
 use std::collections::BTreeMap;
 use std::fs::{File, OpenOptions};
-use std::io::{self, BufWriter, Write, Read, Seek, SeekFrom};
+use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
-use memmap::{Mmap, MmapMut};
+use memmap::Mmap;
 use serde::{Serialize, Deserialize};
-use bincode;
-use crossbeam::epoch;
-use tokio::sync::RwLock as AsyncRwLock;
 use lazy_static::lazy_static;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -144,7 +141,7 @@ impl SSTable {
         }
     }
     
-    pub fn get(&self, key: &[u8]) -> Option<Vec<u8>> {
+    pub fn get(&self, _key: &[u8]) -> Option<Vec<u8>> {
         // Simplified - in real implementation would use bloom filter and sparse index
         // For now, we'll implement proper scanning in the next iteration
         None
@@ -177,7 +174,9 @@ impl LsmStorage {
     
     pub async fn put(&self, key: &[u8], value: &[u8]) -> Result<()> {
         // Write to WAL first (for durability)
-        self.wal.write()?.write_entry(key, value)?;
+        self.wal.write()
+            .map_err(|e| DbError::Storage(format!("WAL lock error: {}", e)))?
+            .write_entry(key, value)?;
         
         // Write to memtable
         {
@@ -224,7 +223,7 @@ impl LsmStorage {
         
         // Scan SSTables
         let sstables = self.sstables.read().unwrap();
-        for sstable in sstables.iter() {
+        for _sstable in sstables.iter() {
             // Simplified - in real implementation would properly scan SSTable
         }
         
@@ -268,7 +267,7 @@ impl LsmStorage {
 // Implement core Database trait for LsmStorage
 #[async_trait::async_trait]
 impl Database for LsmStorage {
-    async fn insert<T: Serialize + Send>(&self, key: &[u8], value: &T) -> Result<()> {
+    async fn insert<T: Serialize + Send + Sync>(&self, key: &[u8], value: &T) -> Result<()> {
         let serialized = bincode::serialize(value)
             .map_err(|e| DbError::Serialization(e.to_string()))?;
         self.put(key, &serialized).await

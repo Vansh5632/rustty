@@ -1,6 +1,13 @@
 [package]
-name = "query"
+name = "rust_db_query"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+rust_db_core = { path = "../core" }
+rust_db_schema = { path = "../schema" }
+rust_db_storage = { path = "../storage" }
+tokio = { workspace = true }
+async-trait = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+bincode = "1.3"

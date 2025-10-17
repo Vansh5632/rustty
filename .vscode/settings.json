@@ -1,0 +1,17 @@
+{
+    // Disable Rust Analyzer diagnostics for TOML files
+    "rust-analyzer.diagnostics.disabled": [
+        "unresolved-import",
+        "unresolved-extern-crate"
+    ],
+    // Disable the Even Better TOML extension validation if you have it
+    "evenBetterToml.schema.enabled": false,
+    // Disable validation for Cargo.toml files
+    "files.associations": {
+        "**/Cargo.toml": "toml"
+    },
+    // Configure Rust Analyzer to not check certain files
+    "rust-analyzer.files.excludeDirs": [],
+    // Disable semantic tokens for TOML
+    "editor.semanticHighlighting.enabled": false
+}

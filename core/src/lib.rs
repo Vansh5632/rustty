@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use serde::{de::{value, DeserializeOwned}, Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Serialize};
 use thiserror::Error;
 use std::collections::HashMap;
 
@@ -26,7 +26,7 @@ pub type Result<T> = std::result::Result<T,DbError>;
 
 #[async_trait]
 pub trait Database:Send+Sync{
-    async fn insert<T:Serialize+ Send>(&self,key:&[u8],value:&T)->Result<()>;
+    async fn insert<T:Serialize+ Send + Sync>(&self,key:&[u8],value:&T)->Result<()>;
     async fn get<T:DeserializeOwned>(&self,key:&[u8])->Result<Option<T>>;
     async fn delete(&self,key:&[u8]) -> Result<()>;
     async fn scan(&self,prefic:&[u8])-> Result<Vec<(Vec<u8>,Vec<u8>)>>;
