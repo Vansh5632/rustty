@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{de::{value, DeserializeOwned}, Serialize};
 use thiserror::Error;
 use std::collections::HashMap;
 
@@ -46,28 +46,45 @@ pub struct Query{
 }
 
 #[derive(Debug,Clone)]
-pub struct Filter{
+pub struct FieldFilter{
     pub field:String,
-    pub operator:Operator,
+    pub operator:FilterOperator,
     pub value:Value,
 }
 
-#[derive(Debug,Clone)]
-pub enum Operator{
-    Eq,
-    Ne,
-    Gt,
-    Lt,
-    Gte,
-    Lte,
+#[derive(Debug, Clone)]
+pub enum FilterOperator {
+    Equal,
+    NotEqual,
+    GreaterThan,
+    LessThan,
+    GreaterThanOrEqual,
+    LessThanOrEqual,
+    Contains,
+    StartsWith,
+    EndsWith,
 }
 
-#[derive(Debug,Clone)]
+#[derive(Debug,Clone,PartialEq)]
 pub enum Value{
     Int(i64),
     Float(f64),
     String(String),
     Bool(bool),
+    Null,
+}
+
+impl Value{
+    pub fn type_matches(&self,other:&Value)->bool{
+        matches!(
+            (self,other),
+            (Value::Int(_),Value::Int(_))|
+            (Value::Float(_),Value::Float(_))|
+            (Value::String(_),Value::String(_))|
+            (Value::Bool(_),Value::Bool(_))|
+            (Value::Null,Value::Null)
+        )
+    }
 }
 
 pub struct Transaction{
@@ -83,4 +100,8 @@ impl Transaction{
     pub async fn rollback(self)->Result<()>{
         Ok(())
     }
+}
+
+pub trait FieldAccess{
+    fn get_field(&self,field_name:&str) -> Option<Value>;
 }
