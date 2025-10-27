@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use serde::{de::{value, DeserializeOwned}, Serialize};
+use serde::{de::DeserializeOwned, Serialize};
 use thiserror::Error;
 use std::collections::HashMap;
 
@@ -46,24 +46,30 @@ pub struct Query{
 }
 
 #[derive(Debug,Clone)]
-pub struct FieldFilter{
+pub struct Filter{
     pub field:String,
-    pub operator:FilterOperator,
+    pub operator:Operator,
     pub value:Value,
 }
 
-#[derive(Debug, Clone)]
-pub enum FilterOperator {
-    Equal,
-    NotEqual,
-    GreaterThan,
-    LessThan,
-    GreaterThanOrEqual,
-    LessThanOrEqual,
+// Alias for backward compatibility
+pub type FieldFilter = Filter;
+
+#[derive(Debug,Clone)]
+pub enum Operator{
+    Eq,
+    Ne,
+    Gt,
+    Lt,
+    Gte,
+    Lte,
     Contains,
     StartsWith,
     EndsWith,
 }
+
+// Alias for backward compatibility
+pub type FilterOperator = Operator;
 
 #[derive(Debug,Clone,PartialEq)]
 pub enum Value{
