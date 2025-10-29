@@ -9,6 +9,9 @@ use serde::{Serialize, Deserialize};
 use lazy_static::lazy_static;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+mod index;
+pub use index::{IndexDescriptor, IndexManager, IndexType};
+
 lazy_static! {
     static ref FLUSH_THRESHOLD: usize = 1024 * 1024; // 1MB
 }
@@ -154,6 +157,7 @@ pub struct LsmStorage {
     wal: RwLock<WriteAheadLog>,
     sstables: RwLock<Vec<SSTable>>,
     base_path: PathBuf,
+    index_manager: Arc<RwLock<IndexManager>>,
 }
 
 impl LsmStorage {
@@ -169,6 +173,7 @@ impl LsmStorage {
             wal: RwLock::new(wal),
             sstables: RwLock::new(Vec::new()),
             base_path: path.to_path_buf(),
+            index_manager: Arc::new(RwLock::new(IndexManager::new())),
         })
     }
     
@@ -261,6 +266,32 @@ impl LsmStorage {
         *self.wal.write().unwrap() = new_wal;
         
         Ok(())
+    }
+
+    // Index management methods
+    pub async fn create_index(&self, descriptor: IndexDescriptor) -> Result<()> {
+        let mut index_mgr = self.index_manager.write().unwrap();
+        index_mgr.create_index(descriptor).await
+    }
+
+    pub async fn get_by_index<T: serde::de::DeserializeOwned>(
+        &self,
+        index_name: &str,
+        value: &rust_db_core::Value,
+    ) -> Result<Vec<T>> {
+        let index_mgr = self.index_manager.read().unwrap();
+        let record_keys = index_mgr.lookup_index(self, index_name, value).await?;
+
+        let mut results = Vec::new();
+        for key in record_keys {
+            if let Some(data) = self.get(&key).await? {
+                let item: T = bincode::deserialize(&data)
+                    .map_err(|e| DbError::Serialization(e.to_string()))?;
+                results.push(item);
+            }
+        }
+
+        Ok(results)
     }
 }
 

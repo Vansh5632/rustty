@@ -9,6 +9,8 @@ pub fn derive_schema(input: TokenStream) -> TokenStream {
 
     let (field_checks, index_fields, field_accessors) = extract_fields(&input);
     
+    // Only generate the impl blocks for Schema and FieldAccess
+    // Don't generate the From impls here as they should be in the core crate
     let expanded = quote! {
         // --- IMPL BLOCK 1: Schema ---
         impl rust_db_core::Schema for #name {
@@ -35,37 +37,6 @@ pub fn derive_schema(input: TokenStream) -> TokenStream {
                     #(#field_accessors)*
                     _ => None,
                 }
-            }
-        }
-
-        // --- IMPL BLOCK 3-6: From implementations for Value conversion ---
-        impl From<&u64> for rust_db_core::Value {
-            fn from(val: &u64) -> Self {
-                rust_db_core::Value::Int(*val as i64)
-            }
-        }
-
-        impl From<&u32> for rust_db_core::Value {
-            fn from(val: &u32) -> Self {
-                rust_db_core::Value::Int(*val as i64)
-            }
-        }
-
-        impl From<&f64> for rust_db_core::Value {
-            fn from(val: &f64) -> Self {
-                rust_db_core::Value::Float(*val)
-            }
-        }
-
-        impl From<&bool> for rust_db_core::Value {
-            fn from(val: &bool) -> Self {
-                rust_db_core::Value::Bool(*val)
-            }
-        }
-
-        impl From<&String> for rust_db_core::Value {
-            fn from(val: &String) -> Self {
-                rust_db_core::Value::String(val.clone())
             }
         }
     };

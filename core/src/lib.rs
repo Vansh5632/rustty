@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{de::DeserializeOwned, Serialize, Deserialize};
 use thiserror::Error;
 use std::collections::HashMap;
 
@@ -71,7 +71,7 @@ pub enum Operator{
 // Alias for backward compatibility
 pub type FilterOperator = Operator;
 
-#[derive(Debug,Clone,PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Value{
     Int(i64),
     Float(f64),
@@ -110,4 +110,47 @@ impl Transaction{
 
 pub trait FieldAccess{
     fn get_field(&self,field_name:&str) -> Option<Value>;
+}
+
+// From implementations for Value conversion
+impl From<&u64> for Value {
+    fn from(val: &u64) -> Self {
+        Value::Int(*val as i64)
+    }
+}
+
+impl From<&u32> for Value {
+    fn from(val: &u32) -> Self {
+        Value::Int(*val as i64)
+    }
+}
+
+impl From<&i64> for Value {
+    fn from(val: &i64) -> Self {
+        Value::Int(*val)
+    }
+}
+
+impl From<&f64> for Value {
+    fn from(val: &f64) -> Self {
+        Value::Float(*val)
+    }
+}
+
+impl From<&bool> for Value {
+    fn from(val: &bool) -> Self {
+        Value::Bool(*val)
+    }
+}
+
+impl From<&String> for Value {
+    fn from(val: &String) -> Self {
+        Value::String(val.clone())
+    }
+}
+
+impl From<&str> for Value {
+    fn from(val: &str) -> Self {
+        Value::String(val.to_string())
+    }
 }
