@@ -35,7 +35,7 @@ async fn main() -> anyhow::Result<()> {
     ];
     
     for user in users {
-        let key = format!("users:{}", user.id).into_bytes();
+        let key = format!("User:{}", user.id).into_bytes();
         storage.insert(&key, &user).await?;
     }
     
@@ -46,7 +46,7 @@ async fn main() -> anyhow::Result<()> {
     ];
     
     for product in products {
-        let key = format!("products:{}", product.id).into_bytes();
+        let key = format!("Product:{}", product.id).into_bytes();
         storage.insert(&key, &product).await?;
     }
     
@@ -73,7 +73,7 @@ async fn main() -> anyhow::Result<()> {
     
     // Get single user
     println!("\nGetting user with ID 2:");
-    let user_key = b"users:2";
+    let user_key = b"User:2";
     if let Some(user) = Database::get::<User>(&storage, user_key).await? {
         println!("  Found: {} - {}", user.name, user.email);
     }

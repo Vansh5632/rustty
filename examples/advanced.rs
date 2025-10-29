@@ -35,7 +35,7 @@ async fn main() -> anyhow::Result<()> {
     ];
     
     for user in users {
-        let key = format!("users:{}", user.id).into_bytes();
+        let key = format!("User:{}", user.id).into_bytes();
         storage.insert(&key, &user).await?;
     }
     

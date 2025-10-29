@@ -1,4 +1,4 @@
-use rust_db_core::{DbError, Database, Result, Schema, Filter, Operator, Value};
+use rust_db_core::{DbError, Database, Result, Schema, Filter, Operator, Value, FieldAccess};
 use std::marker::PhantomData;
 
 pub struct QueryEngine<D> {
@@ -10,7 +10,7 @@ impl<D: Database> QueryEngine<D> {
         Self { db }
     }
     
-    pub fn query<T: Schema + serde::de::DeserializeOwned + Send + Sync>(&self) -> QueryBuilder<T, D> {
+    pub fn query<T: Schema + serde::de::DeserializeOwned + Send + Sync + FieldAccess>(&self) -> QueryBuilder<T, D> {
         QueryBuilder::new(&self.db)
     }
 }
@@ -24,7 +24,7 @@ pub struct QueryBuilder<'a, T, D> {
 
 impl<'a, T, D> QueryBuilder<'a, T, D> 
 where 
-    T: Schema + serde::de::DeserializeOwned + Send + Sync,
+    T: Schema + serde::de::DeserializeOwned + Send + Sync + FieldAccess,
     D: Database,
 {
     pub fn new(db: &'a D) -> Self {
@@ -84,20 +84,67 @@ where
         Ok(results)
     }
     
-    fn apply_filters(&self, _item: &T) -> bool {
-        // Simplified filter application
-        // In real implementation, this would use reflection or generated code
-        // to check field values against filters
+    fn apply_filters(&self, item: &T) -> bool {
+        // Check all filters - item must pass ALL filters (AND logic)
+        for filter in &self.filters {
+            // Get the field value from the item
+            let field_value = match item.get_field(&filter.field) {
+                Some(val) => val,
+                None => return false, // Field doesn't exist
+            };
+            
+            // Apply the operator
+            let matches = match &filter.operator {
+                Operator::Eq => field_value == filter.value,
+                Operator::Ne => field_value != filter.value,
+                Operator::Gt => match (&field_value, &filter.value) {
+                    (Value::Int(a), Value::Int(b)) => a > b,
+                    (Value::Float(a), Value::Float(b)) => a > b,
+                    _ => false,
+                },
+                Operator::Lt => match (&field_value, &filter.value) {
+                    (Value::Int(a), Value::Int(b)) => a < b,
+                    (Value::Float(a), Value::Float(b)) => a < b,
+                    _ => false,
+                },
+                Operator::Gte => match (&field_value, &filter.value) {
+                    (Value::Int(a), Value::Int(b)) => a >= b,
+                    (Value::Float(a), Value::Float(b)) => a >= b,
+                    _ => false,
+                },
+                Operator::Lte => match (&field_value, &filter.value) {
+                    (Value::Int(a), Value::Int(b)) => a <= b,
+                    (Value::Float(a), Value::Float(b)) => a <= b,
+                    _ => false,
+                },
+                Operator::Contains => match (&field_value, &filter.value) {
+                    (Value::String(a), Value::String(b)) => a.contains(b),
+                    _ => false,
+                },
+                Operator::StartsWith => match (&field_value, &filter.value) {
+                    (Value::String(a), Value::String(b)) => a.starts_with(b),
+                    _ => false,
+                },
+                Operator::EndsWith => match (&field_value, &filter.value) {
+                    (Value::String(a), Value::String(b)) => a.ends_with(b),
+                    _ => false,
+                },
+            };
+            
+            // If any filter fails, reject the item
+            if !matches {
+                return false;
+            }
+        }
         
-        // For now, accept all records
-        // We'll implement proper filtering in the next iteration
+        // All filters passed
         true
     }
 }
 
 // Extension trait to add query method to any Database
 pub trait QueryExt: Database {
-    fn query<T: Schema + serde::de::DeserializeOwned + Send + Sync>(&self) -> QueryBuilder<T, Self> 
+    fn query<T: Schema + serde::de::DeserializeOwned + Send + Sync + FieldAccess>(&self) -> QueryBuilder<T, Self> 
     where 
         Self: Sized 
     {
