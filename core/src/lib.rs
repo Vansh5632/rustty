@@ -1,7 +1,10 @@
 use async_trait::async_trait;
+use serde::de::value;
 use serde::{de::DeserializeOwned, Serialize, Deserialize};
 use thiserror::Error;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64,Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Error,Debug)]
 pub enum DbError {
@@ -19,6 +22,11 @@ pub enum DbError {
     
     #[error("Transaction conflict: {0}")]
     TransactionConflict(String),
+
+    #[error("Transaction error: {0}")]
+    Transaction(String),
+    #[error("Deadlock detected: {0}")]
+    Deadlock(String),
 }
 
 //type alias 
@@ -93,10 +101,10 @@ impl Value{
     }
 }
 
-pub struct Transaction{
-    pub id:u64,
-    pub snapshot_ts:u64,
-}
+// pub struct Transaction{
+//     pub id:u64,
+//     pub snapshot_ts:u64,
+// }
 
 impl Transaction{
     pub async fn commit(self)->Result<()>{
@@ -152,5 +160,150 @@ impl From<&String> for Value {
 impl From<&str> for Value {
     fn from(val: &str) -> Self {
         Value::String(val.to_string())
+    }
+}
+
+//MVCC types 
+#[derive(Debug,Clone,Copy,PartialEq,Eq,PartialOrd,Ord,Serialize,Deserialize)]
+pub struct TransactionId(u64);
+
+impl TransactionId{
+    pub fn new()->Self{
+        static COUNTER:AtomicU64 = AtomicU64::new(1);
+        TransactionId(COUNTER.fetch_add(1,Ordering::SeqCst))
+    }
+
+    pub fn as_u64(&self)->u64{
+        self.0
+    }
+}
+
+#[derive(Debug,Clone,Copy,PartialEq,Eq,Serialize,Deserialize,PartialOrd)]
+pub struct VersionTimestamp(u64);
+
+impl VersionTimestamp{
+    pub fn now()-> Self{
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_micros() as u64;
+        VersionTimestamp(now)
+    }
+    
+    pub fn as_u64(&self) -> u64{
+        self.0
+    }
+}
+
+// Transaction states
+#[derive(Debug,Clone)]
+pub enum TransactionState{
+    Active,
+    Committed,
+    Aborted,
+}
+
+// MVCC Record with version info
+#[derive(Debug,Clone,Serialize,Deserialize)]
+pub struct VersionedRecord{
+    pub value:Vec<u8>,
+    pub created_tx:TransactionId,
+    pub expired_tx:TransactionId,
+    pub created_ts:VersionTimestamp,
+    pub expired_ts:VersionTimestamp,
+}
+
+impl VersionedRecord{
+    pub fn new(value:Vec<u8>,tx_id:TransactionId)-> Self{
+        let now = VersionTimestamp::now();
+        Self { value, created_tx: tx_id, expired_tx: TransactionId(0), created_ts: now, expired_ts: VersionTimestamp(0) }
+    }
+
+    pub fn is_visible(&self,tx_id:TransactionId,snapshot_ts:VersionTimestamp)->bool{
+        self.created_ts <= snapshot_ts && (self.expired_tx.0 == 0 || self.expired_ts > snapshot_ts) && self.created_tx != tx_id
+    }
+
+    pub fn mark_experied(&mut self,tx_id:TransactionId){
+        self.expired_tx = tx_id;
+        self.expired_ts = VersionTimestamp::now();
+    }
+}
+
+
+pub struct Transaction{
+    pub id:TransactionId,
+    pub snapshot_ts:VersionTimestamp,
+    pub state:TransactionState,
+    pub writes:HashMap<Vec<u8>,Option<Vec<u8>>>,
+}
+
+impl Transaction{
+    pub fn new()->Self{
+        Self { id: TransactionId::new(), snapshot_ts: VersionTimestamp::now(), state: TransactionState::Active, writes: HashMap::new() }
+    }
+
+    pub fn put(&mut self,key:Vec<u8>,value:Vec<u8>){
+        self.writes.insert(key, Some(value));
+    }
+
+    pub fn delete(&mut self,key:Vec<u8>){
+        self.writes.insert(key, None);
+    }
+}
+
+#[async_trait]
+
+pub trait MvccDatabase:Database {
+    async fn begin_transaction(&self)-> Result<Transaction>;
+    async fn commit_transaction(&self,transaction:Transaction) ->Result<()>;
+    async fn rollback_transaction(&self,transaction:Transaction) -> Result<()>;
+
+    async fn get_for_transaction<T:DeserializeOwned>(
+        &self,
+        key:&[u8],
+        transaction:&Transaction,
+    )->Result<Option<T>>;
+
+    async fn scan_for_transaction(
+        &self,
+        prefix:&[u8],
+        transaction:&Transaction,
+    )->Result<Vec<(Vec<u8>,Vec<u8>)>>;
+}
+
+pub struct TransactionContext<'a,D:MvccDatabase>{
+    db:&'a D,
+    transaction:Option<Transaction>,
+}
+
+impl<'a,D:MvccDatabase> TransactionContext<'a,D>{
+    pub async fn new(db:&'a D)->Result<Self>{
+        let transaction = db.begin_transaction().await?;
+        Ok(Self { db, transaction: Some(transaction) })
+    }
+
+    pub async fn commit(mut self) -> Result<()>{
+        if let Some(transaction) = self.transaction.take(){
+            self.db.commit_transaction(transaction).await
+        }else{
+            Err(DbError::Transaction("Transaction already completed".to_string()))
+        }
+    }
+
+    pub async fn rollback(mut self) -> Result<()>{
+        if let Some(transaction) = self.transaction.take(){
+            self.db.rollback_transaction(transaction).await
+        }else{
+            Err(DbError::Transaction("Transaction already completed".to_string()))
+        }
+    }
+
+    pub fn transaction(&self) -> &Transaction{
+        self.transaction.as_ref().unwrap()
+    }
+}
+
+impl<'a ,D:MvccDatabase> Drop for TransactionContext<'a,D>{
+    fn drop(&mut self){
+        if self.transaction.is_some(){
+
+        }
     }
 }
