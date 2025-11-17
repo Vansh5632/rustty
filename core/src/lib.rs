@@ -164,7 +164,6 @@ impl From<&str> for Value {
 }
 
 //MVCC types 
-#[derive(Debug,Clone,Copy,PartialEq,Eq,PartialOrd,Ord,Serialize,Deserialize)]
 pub struct TransactionId(u64);
 
 impl TransactionId{
@@ -178,7 +177,53 @@ impl TransactionId{
     }
 }
 
-#[derive(Debug,Clone,Copy,PartialEq,Eq,Serialize,Deserialize,PartialOrd)]
+impl std::hash::Hash for TransactionId {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.0.hash(state);
+    }
+}
+
+impl PartialEq for TransactionId {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+
+impl Eq for TransactionId {}
+
+impl Clone for TransactionId {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl Copy for TransactionId {}
+
+impl std::fmt::Debug for TransactionId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("TransactionId").field(&self.0).finish()
+    }
+}
+
+impl Serialize for TransactionId {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.0.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for TransactionId {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        u64::deserialize(deserializer).map(TransactionId)
+    }
+}
+
+#[derive(Debug,Clone,Copy,PartialEq,Eq,Serialize,Deserialize,PartialOrd,Ord)]
 pub struct VersionTimestamp(u64);
 
 impl VersionTimestamp{
@@ -220,7 +265,7 @@ impl VersionedRecord{
         self.created_ts <= snapshot_ts && (self.expired_tx.0 == 0 || self.expired_ts > snapshot_ts) && self.created_tx != tx_id
     }
 
-    pub fn mark_experied(&mut self,tx_id:TransactionId){
+    pub fn mark_expired(&mut self,tx_id:TransactionId){
         self.expired_tx = tx_id;
         self.expired_ts = VersionTimestamp::now();
     }

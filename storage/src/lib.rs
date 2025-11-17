@@ -1,4 +1,4 @@
-use rust_db_core::{DbError, Database, Result};
+use rust_db_core::{Database, DbError, MvccDatabase, Result, Transaction, TransactionState};
 use std::collections::BTreeMap;
 use std::fs::{File, OpenOptions};
 use std::io::{BufWriter, Write};
@@ -8,6 +8,9 @@ use memmap::Mmap;
 use serde::{Serialize, Deserialize};
 use lazy_static::lazy_static;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+mod mvcc;
+pub use mvcc::{MvccStorage, TransactionManager};
 
 mod index;
 pub use index::{IndexDescriptor, IndexManager, IndexType};
@@ -152,10 +155,11 @@ impl SSTable {
 }
 
 // Main LSM Storage Engine
+#[derive(Clone)]
 pub struct LsmStorage {
     memtable: Arc<RwLock<MemTable>>,
-    wal: RwLock<WriteAheadLog>,
-    sstables: RwLock<Vec<SSTable>>,
+    wal: Arc<RwLock<WriteAheadLog>>,
+    sstables: Arc<RwLock<Vec<SSTable>>>,
     base_path: PathBuf,
     index_manager: Arc<RwLock<IndexManager>>,
 }
@@ -167,11 +171,10 @@ impl LsmStorage {
             
         let wal_path = path.join("wal.bin");
         let wal = WriteAheadLog::new(&wal_path)?;
-        
         Ok(LsmStorage {
             memtable: Arc::new(RwLock::new(MemTable::new())),
-            wal: RwLock::new(wal),
-            sstables: RwLock::new(Vec::new()),
+            wal: Arc::new(RwLock::new(wal)),
+            sstables: Arc::new(RwLock::new(Vec::new())),
             base_path: path.to_path_buf(),
             index_manager: Arc::new(RwLock::new(IndexManager::new())),
         })
@@ -322,5 +325,141 @@ impl Database for LsmStorage {
     
     async fn scan(&self, prefix: &[u8]) -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
         self.scan(prefix).await
+    }
+}
+
+// Update LsmStorage to implement MvccDatabase
+#[async_trait::async_trait]
+impl MvccDatabase for LsmStorage {
+    async fn begin_transaction(&self) -> Result<Transaction> {
+        // For now, return a simple transaction
+        // In a real implementation, this would integrate with the transaction manager
+        Ok(Transaction::new())
+    }
+    
+    async fn commit_transaction(&self, mut transaction: Transaction) -> Result<()> {
+        // Apply all writes from the transaction
+        for (key, value_opt) in &transaction.writes {
+            match value_opt {
+                Some(value) => {
+                    self.put(key, value).await?;
+                }
+                None => {
+                    self.delete(key).await?;
+                }
+            }
+        }
+        
+        transaction.state = TransactionState::Committed;
+        Ok(())
+    }
+    
+    async fn rollback_transaction(&self, mut transaction: Transaction) -> Result<()> {
+        // Simply mark as aborted - writes are not applied
+        transaction.state = TransactionState::Aborted;
+        Ok(())
+    }
+    
+    async fn get_for_transaction<T: serde::de::DeserializeOwned>(
+        &self,
+        key: &[u8],
+        _transaction: &Transaction,
+    ) -> Result<Option<T>> {
+        // For now, use regular get - in full MVCC this would check transaction visibility
+        <Self as Database>::get(self, key).await
+    }
+    
+    async fn scan_for_transaction(
+        &self,
+        prefix: &[u8],
+        _transaction: &Transaction,
+    ) -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
+        // For now, use regular scan
+        <Self as Database>::scan(self, prefix).await
+    }
+}
+// Enhanced LsmStorage with MVCC support
+pub struct MvccLsmStorage {
+    base_storage: LsmStorage,
+    transaction_manager: Arc<TransactionManager>,
+}
+
+impl MvccLsmStorage {
+    pub fn new(path: &std::path::Path) -> Result<Self> {
+        let base_storage = LsmStorage::new(path)?;
+        let transaction_manager = Arc::new(TransactionManager::new());
+        
+        Ok(Self {
+            base_storage,
+            transaction_manager,
+        })
+    }
+}
+
+#[async_trait::async_trait]
+impl Database for MvccLsmStorage {
+    async fn insert<T: Serialize + Send + Sync>(&self, key: &[u8], value: &T) -> Result<()> {
+        self.base_storage.insert(key, value).await
+    }
+    
+    async fn get<T: serde::de::DeserializeOwned>(&self, key: &[u8]) -> Result<Option<T>> {
+        <LsmStorage as Database>::get(&self.base_storage, key).await
+    }
+    
+    async fn delete(&self, key: &[u8]) -> Result<()> {
+        self.base_storage.delete(key).await
+    }
+    
+    async fn scan(&self, prefix: &[u8]) -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
+        self.base_storage.scan(prefix).await
+    }
+}
+
+#[async_trait::async_trait]
+impl MvccDatabase for MvccLsmStorage {
+    async fn begin_transaction(&self) -> Result<Transaction> {
+        Ok(self.transaction_manager.begin_transaction())
+    }
+    
+    async fn commit_transaction(&self, mut transaction: Transaction) -> Result<()> {
+        // Apply all writes from the transaction to the base storage
+        for (key, value_opt) in &transaction.writes {
+            match value_opt {
+                Some(value) => {
+                    self.base_storage.put(key, value).await?;
+                }
+                None => {
+                    self.base_storage.delete(key).await?;
+                }
+            }
+        }
+        
+        // Mark transaction as committed
+        self.transaction_manager.commit_transaction(&mut transaction)?;
+        Ok(())
+    }
+    
+    async fn rollback_transaction(&self, mut transaction: Transaction) -> Result<()> {
+        self.transaction_manager.rollback_transaction(&mut transaction)?;
+        Ok(())
+    }
+    
+    async fn get_for_transaction<T: serde::de::DeserializeOwned>(
+        &self,
+        key: &[u8],
+        _transaction: &Transaction,
+    ) -> Result<Option<T>> {
+        // For simplified MVCC, just use base storage
+        // In full implementation, this would check version visibility
+        <LsmStorage as Database>::get(&self.base_storage, key).await
+    }
+    
+    async fn scan_for_transaction(
+        &self,
+        prefix: &[u8],
+        _transaction: &Transaction,
+    ) -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
+        // For simplified MVCC, just use base storage
+        self.base_storage.scan(prefix).await
     }
 }

@@ -1,13 +1,19 @@
-use std::sync::{Arc,RwLock};
 use rust_db_core::{
-    DbError,Result,Transaction,TransactionId,VersionTimestamp,VersionedRecord,TransactionState,MvccDatabase
+    DbError, Result, Transaction, TransactionId, VersionTimestamp, 
+    VersionedRecord, TransactionState
 };
+use super::LsmStorage;
+use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
+use std::sync::atomic::AtomicU64;
+use std::collections::HashSet;
+
 
 
 
 
 pub struct TransactionManager{
-    active_transactions: RwLock<Hashset<TransactionId>>,
+    active_transactions: RwLock<HashSet<TransactionId>>,
     committed_transactions: RwLock<HashMap<TransactionId,VersionTimestamp>>,
     next_tx_id:Arc<AtomicU64>,
 }
@@ -15,14 +21,14 @@ pub struct TransactionManager{
 impl TransactionManager{
     pub fn new()->Self{
         Self{
-            active_transactions:RwLock::new(Hashset::new()),
+            active_transactions:RwLock::new(HashSet::new()),
             committed_transactions:RwLock::new(HashMap::new()),
             next_tx_id:Arc::new(AtomicU64::new(1)),
         }
     }
 
     pub fn begin_transaction(&self)->Transaction{
-        let tx_id = Transactionid::new();
+        let tx_id = TransactionId::new();
         self.active_transactions.write().unwrap().insert(tx_id);
 
         let snapshot_ts = self.get_latest_commit_timestamp();
@@ -73,7 +79,7 @@ impl TransactionManager{
 
     pub fn get_latest_commit_timestamp(&self)->VersionTimestamp{
         let committed = self.committed_transactions.read().unwrap();
-        committed.values().max().copied().unwrap_or(VersionTimestamp(0))
+        committed.values().max().copied().unwrap_or_else(VersionTimestamp::now)
     }
 }
 
@@ -100,7 +106,7 @@ impl MvccStorage{
     )->Result<Option<VersionedRecord>>{
         let versions = self.version_store.read().unwrap();
 
-        if let Some(version_list) = version.get(key){
+        if let Some(version_list) = versions.get(key){
             for version in version_list.iter().rev(){
                 if version.is_visible(transaction.id,transaction.snapshot_ts){
                     return Ok(Some(version.clone()));
@@ -109,7 +115,7 @@ impl MvccStorage{
         }
 
         if let Some(data) = self.base_storage.get(key).await?{
-            let record = VersionedRecord::new(data,TransactionId(0));
+            let record = VersionedRecord::new(data,TransactionId::new());
 
             return Ok(Some(record));
         }
@@ -141,7 +147,7 @@ impl MvccStorage{
 
         if let Some(version_list) = versions.get_mut(key){
             if let Some(latest_version) = version_list.last_mut(){
-                latest_record.mark_experied(transaction.id);
+                latest_version.mark_expired(transaction.id);
             }
         }
 
