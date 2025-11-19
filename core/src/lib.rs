@@ -343,6 +343,10 @@ impl<'a,D:MvccDatabase> TransactionContext<'a,D>{
     pub fn transaction(&self) -> &Transaction{
         self.transaction.as_ref().unwrap()
     }
+
+    pub fn transaction_mut(&mut self) -> &mut Transaction{
+        self.transaction.as_mut().unwrap()
+    }
 }
 
 impl<'a ,D:MvccDatabase> Drop for TransactionContext<'a,D>{
@@ -350,5 +354,57 @@ impl<'a ,D:MvccDatabase> Drop for TransactionContext<'a,D>{
         if self.transaction.is_some(){
 
         }
+    }
+}
+
+// Implement Database trait for Arc<T> where T: Database
+#[async_trait]
+impl<T: Database> Database for std::sync::Arc<T> {
+    async fn insert<V: Serialize + Send + Sync>(&self, key: &[u8], value: &V) -> Result<()> {
+        (**self).insert(key, value).await
+    }
+
+    async fn get<V: DeserializeOwned>(&self, key: &[u8]) -> Result<Option<V>> {
+        (**self).get(key).await
+    }
+
+    async fn delete(&self, key: &[u8]) -> Result<()> {
+        (**self).delete(key).await
+    }
+
+    async fn scan(&self, prefix: &[u8]) -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
+        (**self).scan(prefix).await
+    }
+}
+
+// Implement MvccDatabase trait for Arc<T> where T: MvccDatabase
+#[async_trait]
+impl<T: MvccDatabase> MvccDatabase for std::sync::Arc<T> {
+    async fn begin_transaction(&self) -> Result<Transaction> {
+        (**self).begin_transaction().await
+    }
+
+    async fn commit_transaction(&self, transaction: Transaction) -> Result<()> {
+        (**self).commit_transaction(transaction).await
+    }
+
+    async fn rollback_transaction(&self, transaction: Transaction) -> Result<()> {
+        (**self).rollback_transaction(transaction).await
+    }
+
+    async fn get_for_transaction<V: DeserializeOwned>(
+        &self,
+        key: &[u8],
+        transaction: &Transaction,
+    ) -> Result<Option<V>> {
+        (**self).get_for_transaction(key, transaction).await
+    }
+
+    async fn scan_for_transaction(
+        &self,
+        prefix: &[u8],
+        transaction: &Transaction,
+    ) -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
+        (**self).scan_for_transaction(prefix, transaction).await
     }
 }

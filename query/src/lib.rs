@@ -1,6 +1,9 @@
 use rust_db_core::{DbError, Database, Result, Schema, Filter, Operator, Value, FieldAccess};
 use std::marker::PhantomData;
 
+mod transaction;
+pub use transaction::{TransactionalQueryBuilder, TransactionalQueryExt};
+
 pub struct QueryEngine<D> {
     db: D,
 }

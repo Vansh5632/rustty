@@ -137,10 +137,10 @@ where
 
 // Extension trait for transactional queries
 pub trait TransactionalQueryExt: MvccDatabase {
-    fn query_within_transaction<T: Schema + FieldAccess>(
-        &self, 
-        transaction: &Transaction
-    ) -> TransactionalQueryBuilder<T, Self> 
+    fn query_within_transaction<'a, T: Schema + FieldAccess + serde::de::DeserializeOwned + Send + Sync>(
+        &'a self, 
+        transaction: &'a Transaction
+    ) -> TransactionalQueryBuilder<'a, T, Self> 
     where 
         Self: Sized 
     {
