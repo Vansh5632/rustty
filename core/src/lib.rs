@@ -6,6 +6,9 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64,Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+pub mod compaction;
+pub use compaction::{CompactionStats,CompactionConfig,CompactionStrategy,GcConfig,GcStats};
+
 #[derive(Error,Debug)]
 pub enum DbError {
     #[error("Storage error: {0}")]
@@ -27,6 +30,12 @@ pub enum DbError {
     Transaction(String),
     #[error("Deadlock detected: {0}")]
     Deadlock(String),
+
+    #[error("Compaction error: {0}")]
+    Compaction(String),
+
+    #[error("Garbage collection error:{0}")]
+    GarbageCollection(String),
 }
 
 //type alias 
