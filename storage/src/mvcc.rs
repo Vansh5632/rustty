@@ -15,7 +15,7 @@ use std::collections::HashSet;
 pub struct TransactionManager{
     active_transactions: RwLock<HashSet<TransactionId>>,
     committed_transactions: RwLock<HashMap<TransactionId,VersionTimestamp>>,
-    next_tx_id:Arc<AtomicU64>,
+    _next_tx_id:Arc<AtomicU64>,
 }
 
 impl TransactionManager{
@@ -23,7 +23,7 @@ impl TransactionManager{
         Self{
             active_transactions:RwLock::new(HashSet::new()),
             committed_transactions:RwLock::new(HashMap::new()),
-            next_tx_id:Arc::new(AtomicU64::new(1)),
+            _next_tx_id:Arc::new(AtomicU64::new(1)),
         }
     }
 
@@ -193,5 +193,26 @@ impl MvccStorage{
         }
         
         Ok(results)
+    }
+    
+    pub fn get_oldest_snapshot_timestamp(&self) -> VersionTimestamp {
+        let active_txs = self.transaction_manager.active_transactions.read().unwrap();
+        if active_txs.is_empty() {
+            VersionTimestamp::now()
+        } else {
+            let oldest_snapshot = active_txs.iter().map(|tx_id| {
+                self.transaction_manager.get_commit_timestamp(*tx_id).unwrap_or(VersionTimestamp::from_u64(0))
+            })
+            .min().unwrap_or(VersionTimestamp::now());
+            oldest_snapshot
+        }
+    }
+    
+    pub fn get_version_store(&self) -> std::sync::RwLockReadGuard<HashMap<Vec<u8>, Vec<VersionedRecord>>> {
+        self.version_store.read().unwrap()
+    }
+    
+    pub fn get_version_store_mut(&self) -> std::sync::RwLockWriteGuard<HashMap<Vec<u8>, Vec<VersionedRecord>>> {
+        self.version_store.write().unwrap()
     }
 }

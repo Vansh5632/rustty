@@ -1,5 +1,4 @@
 use async_trait::async_trait;
-use serde::de::value;
 use serde::{de::DeserializeOwned, Serialize, Deserialize};
 use thiserror::Error;
 use std::collections::HashMap;
@@ -239,6 +238,10 @@ impl VersionTimestamp{
     pub fn now()-> Self{
         let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_micros() as u64;
         VersionTimestamp(now)
+    }
+    
+    pub fn from_u64(value: u64) -> Self {
+        VersionTimestamp(value)
     }
     
     pub fn as_u64(&self) -> u64{

@@ -1,5 +1,5 @@
-use rust_db_core::{Database, DbError, MvccDatabase, Result, Transaction, TransactionState};
-use std::collections::BTreeMap;
+use rust_db_core::{Database, DbError, MvccDatabase, Result, Transaction, TransactionState, CompactionConfig, CompactionStats, GcConfig, GcStats};
+use std::collections::{BTreeMap, HashMap};
 use std::fs::{File, OpenOptions};
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
@@ -14,6 +14,12 @@ pub use mvcc::{MvccStorage, TransactionManager};
 
 mod index;
 pub use index::{IndexDescriptor, IndexManager, IndexType};
+
+mod compaction;
+mod garbage_collector;
+
+pub use compaction::{CompactionManager,BackgroundCompactor};
+pub use garbage_collector::{GarbageCollector,BackgroundGc};
 
 lazy_static! {
     static ref FLUSH_THRESHOLD: usize = 1024 * 1024; // 1MB
@@ -107,9 +113,12 @@ impl MemTable {
 }
 
 // SSTable (Sorted String Table) for disk storage
+#[derive(Clone)]
 pub struct SSTable {
-    path: PathBuf,
-    data: Mmap,
+    pub path: PathBuf,
+    data: Arc<Mmap>,
+    pub file_size: u64,
+    pub level: u32,
 }
 
 impl SSTable {
@@ -130,6 +139,11 @@ impl SSTable {
         file.flush()
             .map_err(|e| DbError::Storage(e.to_string()))?;
             
+        // Get file size
+        let metadata = std::fs::metadata(path)
+            .map_err(|e| DbError::Storage(e.to_string()))?;
+        let file_size = metadata.len();
+            
         // Memory map the file for fast reads
         let file = OpenOptions::new()
             .read(true)
@@ -142,7 +156,9 @@ impl SSTable {
                 
             Ok(SSTable {
                 path: path.to_path_buf(),
-                data,
+                data: Arc::new(data),
+                file_size,
+                level: 0,
             })
         }
     }
@@ -152,6 +168,72 @@ impl SSTable {
         // For now, we'll implement proper scanning in the next iteration
         None
     }
+    
+    pub async fn iter(&self) -> Result<Vec<(Vec<u8>, ValueWithTimestamp)>> {
+        // Simplified implementation - returns all key-value pairs
+        // In production, this would be a streaming iterator
+        let mut entries = Vec::new();
+        let cursor = 0;
+        
+        while cursor < self.data.len() {
+            if let Ok((key, value)) = bincode::deserialize_from(&self.data[cursor..]as &[u8]) {
+                entries.push((key, ValueWithTimestamp { value, timestamp: 0 }));
+                // Move cursor - simplified, in production would track exact position
+                break;
+            } else {
+                break;
+            }
+        }
+        
+        Ok(entries)
+    }
+    
+    pub async fn create(path: &Path, data: BTreeMap<Vec<u8>, ValueWithTimestamp>) -> Result<Self> {
+        let mut file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .open(path)
+            .map_err(|e| DbError::Storage(e.to_string()))?;
+            
+        // Serialize data to file
+        for (key, value_with_ts) in &data {
+            let entry = (key, &value_with_ts.value);
+            bincode::serialize_into(&mut file, &entry)
+                .map_err(|e| DbError::Serialization(e.to_string()))?;
+        }
+        
+        file.flush()
+            .map_err(|e| DbError::Storage(e.to_string()))?;
+            
+        // Get file size
+        let metadata = std::fs::metadata(path)
+            .map_err(|e| DbError::Storage(e.to_string()))?;
+        let file_size = metadata.len();
+            
+        // Memory map the file
+        let file = OpenOptions::new()
+            .read(true)
+            .open(path)
+            .map_err(|e| DbError::Storage(e.to_string()))?;
+            
+        unsafe {
+            let mmap_data = Mmap::map(&file)
+                .map_err(|e| DbError::Storage(e.to_string()))?;
+                
+            Ok(SSTable {
+                path: path.to_path_buf(),
+                data: Arc::new(mmap_data),
+                file_size,
+                level: 0,
+            })
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct ValueWithTimestamp {
+    pub value: Vec<u8>,
+    pub timestamp: u64,
 }
 
 // Main LSM Storage Engine
@@ -160,8 +242,10 @@ pub struct LsmStorage {
     memtable: Arc<RwLock<MemTable>>,
     wal: Arc<RwLock<WriteAheadLog>>,
     sstables: Arc<RwLock<Vec<SSTable>>>,
+    sstable_levels: Arc<RwLock<HashMap<u32, Vec<SSTable>>>>,
     base_path: PathBuf,
     index_manager: Arc<RwLock<IndexManager>>,
+    compaction_manager: Option<Arc<CompactionManager>>,
 }
 
 impl LsmStorage {
@@ -171,13 +255,45 @@ impl LsmStorage {
             
         let wal_path = path.join("wal.bin");
         let wal = WriteAheadLog::new(&wal_path)?;
-        Ok(LsmStorage {
+        let storage = LsmStorage {
             memtable: Arc::new(RwLock::new(MemTable::new())),
             wal: Arc::new(RwLock::new(wal)),
             sstables: Arc::new(RwLock::new(Vec::new())),
+            sstable_levels: Arc::new(RwLock::new(HashMap::new())),
             base_path: path.to_path_buf(),
             index_manager: Arc::new(RwLock::new(IndexManager::new())),
-        })
+            compaction_manager: None,
+        };
+        Ok(storage)
+    }
+    
+    pub fn with_compaction(mut self, config: CompactionConfig) -> Self {
+        let storage_arc = Arc::new(self.clone());
+        self.compaction_manager = Some(Arc::new(CompactionManager::new(storage_arc, config)));
+        self
+    }
+    
+    pub fn base_path(&self) -> &Path {
+        &self.base_path
+    }
+    
+    pub async fn trigger_compaction(&self) -> Result<CompactionStats> {
+        if let Some(ref manager) = self.compaction_manager {
+            manager.trigger_compaction().await
+        } else {
+            Err(DbError::Storage("Compaction manager not initialized".to_string()))
+        }
+    }
+    
+    pub async fn add_sstable(&self, sstable: SSTable, level: u32) -> Result<()> {
+        let mut levels = self.sstable_levels.write().unwrap();
+        levels.entry(level).or_insert_with(Vec::new).push(sstable);
+        Ok(())
+    }
+    
+    pub fn get_sstables_at_level(&self, level: u32) -> Vec<SSTable> {
+        let levels = self.sstable_levels.read().unwrap();
+        levels.get(&level).cloned().unwrap_or_default()
     }
     
     pub async fn put(&self, key: &[u8], value: &[u8]) -> Result<()> {
@@ -382,6 +498,8 @@ impl MvccDatabase for LsmStorage {
 pub struct MvccLsmStorage {
     base_storage: LsmStorage,
     transaction_manager: Arc<TransactionManager>,
+    mvcc_storage: Option<Arc<MvccStorage>>,
+    garbage_collector: Option<Arc<GarbageCollector>>,
 }
 
 impl MvccLsmStorage {
@@ -392,7 +510,26 @@ impl MvccLsmStorage {
         Ok(Self {
             base_storage,
             transaction_manager,
+            mvcc_storage: None,
+            garbage_collector: None,
         })
+    }
+    
+    pub fn with_garbage_collection(mut self, config: GcConfig) -> Result<Self> {
+        let base_storage_clone = self.base_storage.clone();
+        let mvcc_storage = Arc::new(MvccStorage::new(base_storage_clone));
+        let gc = Arc::new(GarbageCollector::new(Arc::clone(&mvcc_storage), config));
+        self.mvcc_storage = Some(mvcc_storage);
+        self.garbage_collector = Some(gc);
+        Ok(self)
+    }
+    
+    pub async fn run_garbage_collection(&self) -> Result<GcStats> {
+        if let Some(ref gc) = self.garbage_collector {
+            gc.run_garbage_collection().await
+        } else {
+            Err(DbError::Storage("Garbage collector not initialized".to_string()))
+        }
     }
 }
 
