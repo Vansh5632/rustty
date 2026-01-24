@@ -17,9 +17,11 @@ pub use index::{IndexDescriptor, IndexManager, IndexType};
 
 mod compaction;
 mod garbage_collector;
+mod security_layer;
 
 pub use compaction::{CompactionManager,BackgroundCompactor};
 pub use garbage_collector::{GarbageCollector,BackgroundGc};
+pub use security_layer::SecurityLayer;
 
 lazy_static! {
     static ref FLUSH_THRESHOLD: usize = 1024 * 1024; // 1MB

@@ -6,7 +6,18 @@ use std::sync::atomic::{AtomicU64,Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub mod compaction;
+pub mod security;
+pub mod wasm;
+
 pub use compaction::{CompactionStats,CompactionConfig,CompactionStrategy,GcConfig,GcStats};
+pub use security::{
+    Principal, Permission, SecurityContext, OperationType, Resource,
+    AccessDecision, AuditLogEntry, EncryptionConfig, EncryptionAlgorithm
+};
+pub use wasm::{
+    WasmProcedure, Parameter, DataType, WasmExecutionContext,
+    WasmValue, WasmExecutionResult
+};
 
 #[derive(Error,Debug)]
 pub enum DbError {
@@ -27,6 +38,7 @@ pub enum DbError {
 
     #[error("Transaction error: {0}")]
     Transaction(String),
+    
     #[error("Deadlock detected: {0}")]
     Deadlock(String),
 
@@ -35,6 +47,18 @@ pub enum DbError {
 
     #[error("Garbage collection error:{0}")]
     GarbageCollection(String),
+
+    #[error("Security violation: {0}")]
+    Security(String),
+    
+    #[error("WASM execution error: {0}")]
+    Wasm(String),
+    
+    #[error("Access denied: {0}")]
+    AccessDenied(String),
+    
+    #[error("Encryption error: {0}")]
+    Encryption(String),
 }
 
 //type alias 
@@ -419,4 +443,19 @@ impl<T: MvccDatabase> MvccDatabase for std::sync::Arc<T> {
     ) -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
         (**self).scan_for_transaction(prefix, transaction).await
     }
+}
+// Security and WASM extension traits
+#[async_trait]
+pub trait SecureDatabase: Database {
+    async fn authenticate(&self, username: &str, password: &str) -> Result<Principal>;
+    async fn authorize(&self, context: &SecurityContext) -> Result<AccessDecision>;
+    async fn log_audit(&self, entry: AuditLogEntry) -> Result<()>;
+}
+
+#[async_trait]
+pub trait WasmDatabase: Database {
+    async fn register_procedure(&self, procedure: WasmProcedure, wasm_bytes: Vec<u8>) -> Result<()>;
+    async fn execute_procedure(&self, context: WasmExecutionContext) -> Result<WasmExecutionResult>;
+    async fn list_procedures(&self) -> Result<Vec<WasmProcedure>>;
+    async fn drop_procedure(&self, name: &str) -> Result<()>;
 }
