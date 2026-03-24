@@ -1,7 +1,16 @@
 # ============================================================
+# Stage 0: Source of a fresh Debian keyring
+# (rust:bookworm has a stale keyring; we borrow from a freshly pulled image)
+# ============================================================
+FROM debian:bookworm-slim AS keyring-source
+
+# ============================================================
 # Stage 1: Build the release binary
 # ============================================================
-FROM rust:1.82-bookworm AS builder
+FROM rust:bookworm AS builder
+
+# Overwrite the stale keyring in the Rust image with a fresh one
+COPY --from=keyring-source /etc/apt/trusted.gpg.d/ /etc/apt/trusted.gpg.d/
 
 # Install system libraries required by ring and wasmtime
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -13,7 +22,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /build
 
 # ---- Cache dependencies first (Docker layer caching) ----
-# Copy only manifests + lock so dependency layer is cached when src changes
 COPY Cargo.toml Cargo.lock ./
 COPY core/Cargo.toml core/Cargo.toml
 COPY schema/Cargo.toml schema/Cargo.toml
@@ -22,7 +30,7 @@ COPY query/Cargo.toml query/Cargo.toml
 COPY wasm/Cargo.toml wasm/Cargo.toml
 COPY server/Cargo.toml server/Cargo.toml
 
-# Create stub lib.rs / main.rs for each crate so cargo can resolve the workspace
+# Create stub sources so cargo can resolve the workspace
 RUN mkdir -p src core/src schema/src storage/src query/src wasm/src server/src && \
     echo "fn main() {}" > src/main.rs && \
     echo "" > core/src/lib.rs && \
@@ -32,12 +40,11 @@ RUN mkdir -p src core/src schema/src storage/src query/src wasm/src server/src &
     echo "" > wasm/src/lib.rs && \
     echo "fn main() {}" > server/src/main.rs
 
-# Pre-build dependencies (this layer is cached unless Cargo.toml/lock changes)
+# Pre-build dependencies (cached unless Cargo.toml/lock changes)
 RUN cargo build --release 2>/dev/null || true
 
-# ---- Now copy the real source and rebuild ----
+# ---- Copy the real source and rebuild ----
 COPY . .
-# Touch all source files so cargo rebuilds them (not the cached deps)
 RUN find . -name "*.rs" -exec touch {} +
 RUN cargo build --release --bin Rustdb
 
@@ -63,7 +70,6 @@ RUN mkdir -p /data && chown rustdb:rustdb /data
 USER rustdb
 WORKDIR /home/rustdb
 
-# Data directory as a volume for persistence
 VOLUME ["/data"]
 
 ENV RUSTDB_DATA_DIR=/data
