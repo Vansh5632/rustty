@@ -1,0 +1,25 @@
+# Build artifacts
+target/
+debug/
+
+# Data directory
+data/
+
+# Git
+.git/
+.gitignore
+
+# Documentation (not needed in image)
+*.md
+LICENSE
+
+# IDE
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Test fixtures (not needed at runtime)
+fixtures/

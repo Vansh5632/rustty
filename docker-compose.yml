@@ -1,0 +1,26 @@
+services:
+  rustdb:
+    build: .
+    image: vansh5632/rustdb:latest
+    container_name: rustdb
+    stdin_open: true    # Keep stdin open for REPL
+    tty: true           # Allocate a pseudo-TTY for REPL
+    volumes:
+      - rustdb-data:/data
+    environment:
+      - RUSTDB_DATA_DIR=/data
+
+  # Run the built-in demo (non-interactive)
+  rustdb-demo:
+    build: .
+    image: vansh5632/rustdb:latest
+    container_name: rustdb-demo
+    volumes:
+      - rustdb-demo-data:/data
+    command: ["--demo", "--data-dir", "/data"]
+    profiles:
+      - demo
+
+volumes:
+  rustdb-data:
+  rustdb-demo-data:
